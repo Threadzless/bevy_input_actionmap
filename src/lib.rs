@@ -21,7 +21,7 @@ mod serialize;
 mod input;
 pub use input::*;
 
-/// A set of [BindInput]s which must all be met to trigger an action
+/// A set of [`BindInput`]s which must all be met to trigger an action
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct Binding {
@@ -253,10 +253,8 @@ pub struct InputMap<T> {
     pub(crate) actions: HashMap<T, Action>,
     gamepad_pressed_buttons: ButtonInput<GamepadButtonType>,
     gamepad_axis: HashMap<GamepadAxisDirection, f32>,
-    raw_active: Vec<(T, Binding, f32)>,
-    active: HashMap<T, f32>,
-    just_active: HashMap<T, f32>,
-    just_inactive: HashSet<T>,
+    raw: Vec<(T, Binding, f32)>,
+    state: ActiveState<T>,
     gamepads: HashSet<Gamepad>,
     wants_clear: bool,
 }
@@ -267,10 +265,8 @@ impl<T> Default for InputMap<T> {
             actions: HashMap::new(),
             gamepad_pressed_buttons: ButtonInput::default(),
             gamepad_axis: HashMap::new(),
-            raw_active: Vec::new(),
-            active: HashMap::new(),
-            just_active: HashMap::new(),
-            just_inactive: HashSet::new(),
+            raw: Vec::new(),
+            state: ActiveState::<T>::new(),
             gamepads: HashSet::new(),
             wants_clear: false,
         }
@@ -303,26 +299,22 @@ where
 
     /// Returns whether a given action is currently triggered.
     pub fn active<K: Into<T>>(&self, key: K) -> bool {
-        self.active.contains_key(&key.into())
+        self.state.active(key)
     }
 
     /// Returns whether a given action has just been triggered.
     pub fn just_active<K: Into<T>>(&self, key: K) -> bool {
-        self.just_active.contains_key(&key.into())
+        self.state.just_active(key)
     }
 
     /// Returns whether a given action has just stopped being triggered.
     pub fn just_inactive<K: Into<T>>(&self, key: K) -> bool {
-        self.just_inactive.contains(&key.into())
+        self.state.just_inactive(key)
     }
 
     /// Returns the strength of an active triggered action for use with analog input.
     pub fn strength<K: Into<T>>(&self, key: K) -> f32 {
-        if let Some(strength) = self.active.get(&key.into()) {
-            *strength
-        } else {
-            0.
-        }
+        self.state.strength(key)
     }
 
     /// Clears all triggered actions without changing configured bindings.
@@ -330,16 +322,13 @@ where
         self.wants_clear = true;
         self.gamepad_pressed_buttons.clear();
         self.gamepad_axis.clear();
-        self.raw_active.clear();
-        self.active.clear();
-        self.just_active.clear();
-        self.just_inactive.clear();
+        self.raw.clear();
+        self.state.clear();
     }
 
     /// System that clears specifically the maps of just active or just inactive actions
     fn clear_just_active_inactive(mut input_map: ResMut<InputMap<T>>) {
-        input_map.just_active.clear();
-        input_map.just_inactive.clear();
+        input_map.state.clear_changes();
     }
 
     fn handle_input(
@@ -356,7 +345,7 @@ where
             }
         }
 
-        input_map.raw_active = raw_active;
+        input_map.raw = raw_active;
     }
 
 
@@ -414,10 +403,10 @@ where
 
     /// System that prunes conflicting actions by prioritizing that with the higher weight.
     fn resolve_conflicts(mut input_map: ResMut<InputMap<T>>, input: Res<ButtonInput<KeyCode>>) {
-        let mut active_resolve_conflicts = input_map.raw_active.clone();
+        let mut active_resolve_conflicts = input_map.raw.clone();
         
-        for (idx, outer) in input_map.raw_active.iter().enumerate() {
-            for inner in (input_map.raw_active).as_slice()[idx + 1 .. ].iter() {
+        for (idx, outer) in input_map.raw.iter().enumerate() {
+            for inner in (input_map.raw).as_slice()[idx + 1 .. ].iter() {
                 let (_, outer_bind, _) = &outer;
                 let (_, inner_bind, _) = &inner;
 
@@ -435,7 +424,7 @@ where
         
         let just_active = active_resolve_conflicts.iter()
             .filter_map(|(val, bind, strength)| {
-                match input_map.active.contains_key(&val) {
+                match input_map.state.active.contains_key(&val) {
                     true => None,
                     false => Some((val, bind, strength))
                 }
@@ -444,7 +433,7 @@ where
         
         for (val, bind, strength) in just_active {
             if bind.get_keycodes().is_empty() || bind.key_pressed(&input) {
-                input_map.just_active.insert(val.clone(), *strength);
+                input_map.state.just_active.insert(val.clone(), *strength);
             }
         }
         
@@ -453,17 +442,17 @@ where
             .map(|(val, _, strength)| (val.clone(), *strength))
             .collect::<Vec<(T, f32)>>();
 
-        let prev_active = input_map.active.clone();
+        let prev_active = input_map.state.active.clone();
         for prev in prev_active.keys() {
             let active_binds = active.iter().find(|(val, _)| *val == *prev );
             if active_binds.is_none() {
-                input_map.just_inactive.insert(prev.clone());
+                input_map.state.just_inactive.insert(prev.clone());
             }
         }
 
-        input_map.active.clear();
-        input_map.active.extend( active );
-        input_map.raw_active.clear();
+        input_map.state.active.clear();
+        input_map.state.active.extend( active );
+        input_map.raw.clear();
     }
 
     /// System that assists in clearing the input by modifying the actual [`Input`] resource interal
@@ -535,3 +524,80 @@ where
 #[doc = include_str!("../README.md")]
 #[cfg(doctest)]
 struct ReadmeDoctests;
+
+
+
+
+#[derive(Debug, Default)]
+pub struct ActiveState<T> {
+    active: HashMap<T, f32>,
+    just_active: HashMap<T, f32>,
+    just_inactive: HashSet<T>,
+}
+
+impl<T: Clone> Clone for ActiveState<T> {
+    fn clone(&self) -> Self {
+        Self {
+            active: self.active.clone(),
+            just_active: self.just_active.clone(),
+            just_inactive: self.just_inactive.clone(),
+        }
+    }
+}
+
+impl<T> ActiveState<T> {
+    pub fn new() -> Self  {
+        Self {
+            active: HashMap::new(),
+            just_active: HashMap::new(),
+            just_inactive: HashSet::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.active.clear();
+        self.just_active.clear();
+        self.just_inactive.clear();
+    }
+
+    pub fn clear_changes(&mut self) {
+        self.just_active.clear();
+        self.just_inactive.clear();
+    }
+
+    /// Returns whether a given action is currently triggered.
+    pub fn active<K: Into<T>>(&self, key: K) -> bool
+    where 
+        T: Hash + Eq
+    {
+        self.active.contains_key(&key.into())
+    }
+
+    /// Returns whether a given action has just been triggered.
+    pub fn just_active<K: Into<T>>(&self, key: K) -> bool 
+    where 
+        T: Hash + Eq
+    {
+        self.just_active.contains_key(&key.into())
+    }
+
+    /// Returns whether a given action has just stopped being triggered.
+    pub fn just_inactive<K: Into<T>>(&self, key: K) -> bool 
+    where 
+        T: Hash + Eq
+    {
+        self.just_inactive.contains(&key.into())
+    }
+
+    /// Returns the strength of an active triggered action for use with analog input.
+    pub fn strength<K: Into<T>>(&self, key: K) -> f32 
+    where 
+        T: Hash + Clone + Eq
+    {
+        if let Some(strength) = self.active.get(&key.into()) {
+            *strength
+        } else {
+            0.
+        }
+    }
+}
