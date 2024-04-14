@@ -297,6 +297,10 @@ where
         self
     }
 
+    pub fn state(&self) -> ActiveState<T> {
+        self.state.clone()
+    }
+
     /// Returns whether a given action is currently triggered.
     pub fn active<K: Into<T>>(&self, key: K) -> bool {
         self.state.active(key)
@@ -528,7 +532,7 @@ struct ReadmeDoctests;
 
 
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ActiveState<T> {
     active: HashMap<T, f32>,
     just_active: HashMap<T, f32>,
@@ -541,6 +545,16 @@ impl<T: Clone> Clone for ActiveState<T> {
             active: self.active.clone(),
             just_active: self.just_active.clone(),
             just_inactive: self.just_inactive.clone(),
+        }
+    }
+}
+
+impl<T: Default> Default for ActiveState<T> {
+    fn default() -> Self {
+        Self {
+            active: Default::default(),
+            just_active: Default::default(),
+            just_inactive: Default::default()
         }
     }
 }
