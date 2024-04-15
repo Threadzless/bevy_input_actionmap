@@ -563,7 +563,7 @@ impl<T> ActiveState<T> {
         T: Hash + Eq
     {
         let y = self.strength(up) - self.strength(down);
-        let x = self.strength(left) - self.strength(right);
+        let x = self.strength(right) - self.strength(left);
         Vec2 { x, y }
     }
 
