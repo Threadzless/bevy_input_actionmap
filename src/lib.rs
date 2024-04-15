@@ -558,6 +558,15 @@ impl<T> ActiveState<T> {
         }
     }
 
+    pub fn two_axis(&self, up: T, down: T, left: T, right: T) -> Vec2 
+    where
+        T: Hash + Eq
+    {
+        let y = self.strength(up) - self.strength(down);
+        let x = self.strength(left) - self.strength(right);
+        Vec2 { x, y }
+    }
+
     pub fn clear(&mut self) {
         self.active.clear();
         self.just_active.clear();
@@ -596,7 +605,7 @@ impl<T> ActiveState<T> {
     /// Returns the strength of an active triggered action for use with analog input.
     pub fn strength<K: Into<T>>(&self, key: K) -> f32 
     where 
-        T: Hash + Clone + Eq
+        T: Hash + Eq
     {
         if let Some(strength) = self.active.get(&key.into()) {
             *strength
